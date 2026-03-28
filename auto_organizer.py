@@ -1,5 +1,6 @@
 import os
 import re
+import json
 import shutil
 import traceback
 from pathlib import Path
@@ -18,7 +19,7 @@ except Exception:
 try:
     import docx
 except Exception:
-        docx = None
+    docx = None
 
 try:
     import openpyxl
@@ -36,6 +37,7 @@ except Exception:
 # =========================
 MAX_TEXT_LENGTH = 2500
 PREVIEW_ROWS_LIMIT = 5000
+UNDO_LOG_FILENAME = "last_move_log.json"
 
 TOP_CATEGORIES = [
     "01_개인문서",
@@ -64,159 +66,43 @@ EXTENSION_MAP = {
     "실행": [".exe", ".msi", ".bat", ".cmd", ".lnk"],
 }
 
-# =========================
-# 제목 기반 상세 분류 규칙
-# 우선순위 중요: 위에 있을수록 먼저 잡힘
-# =========================
 TITLE_RULES = [
-    # 개인문서
-    {
-        "top": "01_개인문서",
-        "sub": "증명서",
-        "keywords": ["증명서", "졸업증명", "재학증명", "성적증명", "수료증", "certificate"],
-    },
-    {
-        "top": "01_개인문서",
-        "sub": "법률문서",
-        "keywords": ["위임장", "소송", "계약서", "서약", "법률", "합의서", "임대차", "임차"],
-    },
-    {
-        "top": "01_개인문서",
-        "sub": "이력서_포트폴리오",
-        "keywords": ["이력서", "자소서", "포트폴리오", "resume", "cv"],
-    },
-    {
-        "top": "01_개인문서",
-        "sub": "메모_일반문서",
-        "keywords": ["메모", "before", "추천 도서", "노트", "정리", "초안"],
-    },
+    {"top": "01_개인문서", "sub": "증명서", "keywords": ["증명서", "졸업증명", "재학증명", "성적증명", "수료증", "certificate"]},
+    {"top": "01_개인문서", "sub": "법률문서", "keywords": ["위임장", "소송", "계약서", "서약", "법률", "합의서", "임대차", "임차"]},
+    {"top": "01_개인문서", "sub": "이력서_포트폴리오", "keywords": ["이력서", "자소서", "포트폴리오", "resume", "cv"]},
+    {"top": "01_개인문서", "sub": "메모_일반문서", "keywords": ["메모", "before", "추천 도서", "노트", "정리", "초안"]},
 
-    # 프로젝트
-    {
-        "top": "02_프로젝트",
-        "sub": "BPcare",
-        "keywords": ["bpcare", "bp care"],
-    },
-    {
-        "top": "02_프로젝트",
-        "sub": "딥러닝_머신러닝프로젝트",
-        "keywords": ["머신러닝", "딥러닝", "모델", "예측", "classification", "regression", "rmse", "auc"],
-    },
-    {
-        "top": "02_프로젝트",
-        "sub": "텍스트분석_의료상담",
-        "keywords": ["의료 상담", "의료상담", "텍스트 데이터", "텍스트데이터", "healthcaremagic", "토픽모델링", "lda"],
-    },
-    {
-        "top": "02_프로젝트",
-        "sub": "해커톤",
-        "keywords": ["해커톤", "hackathon"],
-    },
-    {
-        "top": "02_프로젝트",
-        "sub": "컴퓨터비전_의료영상",
-        "keywords": ["task09", "spleen", "segmentation", "cv_", "monai", "nii", "의료영상"],
-    },
-    {
-        "top": "02_프로젝트",
-        "sub": "기타프로젝트",
-        "keywords": ["project", "프로젝트", "task", "실습과제", "과제", "analysis"],
-    },
+    {"top": "02_프로젝트", "sub": "BPcare", "keywords": ["bpcare", "bp care"]},
+    {"top": "02_프로젝트", "sub": "딥러닝_머신러닝프로젝트", "keywords": ["머신러닝", "딥러닝", "모델", "예측", "classification", "regression", "rmse", "auc"]},
+    {"top": "02_프로젝트", "sub": "텍스트분석_의료상담", "keywords": ["의료 상담", "의료상담", "텍스트 데이터", "텍스트데이터", "healthcaremagic", "토픽모델링", "lda"]},
+    {"top": "02_프로젝트", "sub": "해커톤", "keywords": ["해커톤", "hackathon"]},
+    {"top": "02_프로젝트", "sub": "컴퓨터비전_의료영상", "keywords": ["task09", "spleen", "segmentation", "cv_", "monai", "nii", "의료영상"]},
+    {"top": "02_프로젝트", "sub": "기타프로젝트", "keywords": ["project", "프로젝트", "task", "실습과제", "과제", "analysis"]},
 
-    # 공부자료
-    {
-        "top": "03_공부자료",
-        "sub": "AI_머신러닝",
-        "keywords": ["머신러닝", "기계학습", "ml", "딥러닝", "ai", "인공지능"],
-    },
-    {
-        "top": "03_공부자료",
-        "sub": "파이썬",
-        "keywords": ["python", "파이썬"],
-    },
-    {
-        "top": "03_공부자료",
-        "sub": "SQL_데이터베이스",
-        "keywords": ["sql", "database", "db", "데이터베이스", "혼공sql", "sqlite"],
-    },
-    {
-        "top": "03_공부자료",
-        "sub": "웹개발",
-        "keywords": ["html", "css", "javascript", "react", "웹"],
-    },
-    {
-        "top": "03_공부자료",
-        "sub": "수학_통계",
-        "keywords": ["통계", "수학", "기초수학", "선형대수", "확률"],
-    },
-    {
-        "top": "03_공부자료",
-        "sub": "강의_수업자료",
-        "keywords": ["강의", "수업", "교재", "학습", "로드맵", "day", "5일차"],
-    },
+    {"top": "03_공부자료", "sub": "AI_머신러닝", "keywords": ["머신러닝", "기계학습", "ml", "딥러닝", "ai", "인공지능"]},
+    {"top": "03_공부자료", "sub": "파이썬", "keywords": ["python", "파이썬"]},
+    {"top": "03_공부자료", "sub": "SQL_데이터베이스", "keywords": ["sql", "database", "db", "데이터베이스", "혼공sql", "sqlite"]},
+    {"top": "03_공부자료", "sub": "웹개발", "keywords": ["html", "css", "javascript", "react", "웹"]},
+    {"top": "03_공부자료", "sub": "수학_통계", "keywords": ["통계", "수학", "기초수학", "선형대수", "확률"]},
+    {"top": "03_공부자료", "sub": "강의_수업자료", "keywords": ["강의", "수업", "교재", "학습", "로드맵", "day", "5일차"]},
 
-    # 데이터
-    {
-        "top": "04_데이터",
-        "sub": "엑셀데이터",
-        "keywords": ["data", "dataset", "biometric", "환자", "medical", "상담 데이터", "csv", "xlsx"],
-    },
-    {
-        "top": "04_데이터",
-        "sub": "텍스트데이터",
-        "keywords": ["text", "텍스트", "corpus", "대화 데이터", "의료 상담 텍스트"],
-    },
-    {
-        "top": "04_데이터",
-        "sub": "데이터베이스파일",
-        "keywords": ["sqlite", "db", "database", "example.db"],
-    },
+    {"top": "04_데이터", "sub": "엑셀데이터", "keywords": ["data", "dataset", "biometric", "환자", "medical", "상담 데이터", "csv", "xlsx"]},
+    {"top": "04_데이터", "sub": "텍스트데이터", "keywords": ["text", "텍스트", "corpus", "대화 데이터", "의료 상담 텍스트"]},
+    {"top": "04_데이터", "sub": "데이터베이스파일", "keywords": ["sqlite", "db", "database", "example.db"]},
 
-    # 이미지/미디어
-    {
-        "top": "05_이미지_미디어",
-        "sub": "이미지",
-        "keywords": ["png", "jpg", "jpeg", "image", "사진", "서명", "로드맵"],
-    },
-    {
-        "top": "05_이미지_미디어",
-        "sub": "영상",
-        "keywords": ["영상", "응원 영상", "video", "mp4"],
-    },
-    {
-        "top": "05_이미지_미디어",
-        "sub": "오디오",
-        "keywords": ["mp3", "wav", "audio", "녹음"],
-    },
+    {"top": "05_이미지_미디어", "sub": "이미지", "keywords": ["png", "jpg", "jpeg", "image", "사진", "서명", "로드맵"]},
+    {"top": "05_이미지_미디어", "sub": "영상", "keywords": ["영상", "응원 영상", "video", "mp4"]},
+    {"top": "05_이미지_미디어", "sub": "오디오", "keywords": ["mp3", "wav", "audio", "녹음"]},
 
-    # 개발도구 / 참고자료
-    {
-        "top": "06_개발도구_참고자료",
-        "sub": "깃허브_깃",
-        "keywords": ["github", "git", "sourcetree"],
-    },
-    {
-        "top": "06_개발도구_참고자료",
-        "sub": "개발도구",
-        "keywords": ["vscode", "capcut", "browser", "studio", "tool", "helper"],
-    },
-    {
-        "top": "06_개발도구_참고자료",
-        "sub": "참고PDF_자료",
-        "keywords": ["pdf", "자료", "문법", "기초", "심화"],
-    },
+    {"top": "06_개발도구_참고자료", "sub": "깃허브_깃", "keywords": ["github", "git", "sourcetree"]},
+    {"top": "06_개발도구_참고자료", "sub": "개발도구", "keywords": ["vscode", "capcut", "browser", "studio", "tool", "helper"]},
+    {"top": "06_개발도구_참고자료", "sub": "참고PDF_자료", "keywords": ["pdf", "자료", "문법", "기초", "심화"]},
 ]
 
 
 # =========================
 # 유틸
 # =========================
-def sanitize_name(name: str) -> str:
-    name = re.sub(r'[<>:"/\\|?*]', "_", name)
-    name = re.sub(r"\s+", " ", name).strip()
-    return name[:120] if len(name) > 120 else name
-
-
 def unique_path(dest_path: Path) -> Path:
     if not dest_path.exists():
         return dest_path
@@ -237,7 +123,7 @@ def is_hidden_or_system(path: Path) -> bool:
     name = path.name.lower()
     if name.startswith("."):
         return True
-    if name in {"desktop.ini", "thumbs.db"}:
+    if name in {"desktop.ini", "thumbs.db", UNDO_LOG_FILENAME.lower()}:
         return True
     return False
 
@@ -267,8 +153,7 @@ def read_pdf_text(path: Path) -> str:
         reader = PdfReader(str(path))
         texts = []
         for page in reader.pages[:3]:
-            txt = page.extract_text() or ""
-            texts.append(txt)
+            texts.append(page.extract_text() or "")
         return "\n".join(texts)[:MAX_TEXT_LENGTH]
     except Exception:
         return ""
@@ -323,7 +208,6 @@ def read_pptx_text(path: Path) -> str:
 
 def extract_file_text(path: Path) -> str:
     ext = path.suffix.lower()
-
     if ext in [".txt", ".md", ".py", ".js", ".html", ".css", ".json", ".sql", ".csv", ".yml", ".yaml"]:
         return read_text_file(path)
     if ext == ".pdf":
@@ -334,7 +218,6 @@ def extract_file_text(path: Path) -> str:
         return read_xlsx_text(path)
     if ext == ".pptx":
         return read_pptx_text(path)
-
     return ""
 
 
@@ -351,35 +234,22 @@ def detect_extension_type(path: Path) -> str:
 
 
 def classify_by_title(name_text: str):
-    """
-    파일명/폴더명 제목만 보고 분류
-    반환: (top, sub, reason)
-    """
     lowered = normalize_text(name_text)
-
     for rule in TITLE_RULES:
         for kw in rule["keywords"]:
             if kw.lower() in lowered:
                 return rule["top"], rule["sub"], f"제목 키워드 매칭: {kw}"
-
     return None, None, None
 
 
 def classify_with_title_and_content(path: Path, is_folder: bool):
-    """
-    반환:
-    target_folder, reason
-    예: 03_공부자료/AI_머신러닝
-    """
     name = path.name
     ext_type = detect_extension_type(path)
 
-    # 1차: 제목 기반 분류
     top, sub, reason = classify_by_title(name)
     if top and sub:
         return f"{top}\\{sub}", reason
 
-    # 2차: 내용 기반 보조
     if not is_folder:
         text = extract_file_text(path)
         combined = f"{name}\n{text}".lower()
@@ -399,7 +269,6 @@ def classify_with_title_and_content(path: Path, is_folder: bool):
                 if kw.lower() in combined:
                     return f"{top_c}\\{sub_c}", f"내용 키워드 매칭: {kw}"
 
-    # 3차: 확장자 기반 기본 분류
     if ext_type == "문서":
         return "01_개인문서\\메모_일반문서", f"확장자 기반 분류: {path.suffix.lower()}"
     if ext_type == "스프레드시트":
@@ -423,11 +292,42 @@ def classify_with_title_and_content(path: Path, is_folder: bool):
     if ext_type == "데이터":
         return "04_데이터\\데이터베이스파일", f"확장자 기반 분류: {path.suffix.lower()}"
 
-    # 4차: 폴더는 애매하면 직접확인
     if is_folder:
         return "99_직접확인필요\\폴더", "폴더명만으로 상세 분류 어려움"
 
     return "99_직접확인필요\\파일", "제목/내용/확장자 기준으로도 분류 불명확"
+
+
+# =========================
+# Undo 로그 관리
+# =========================
+def get_undo_log_path(root_folder: str) -> Path:
+    return Path(root_folder) / UNDO_LOG_FILENAME
+
+
+def save_undo_log(root_folder: str, move_records: list):
+    log_path = get_undo_log_path(root_folder)
+    payload = {
+        "root_folder": str(Path(root_folder).resolve()),
+        "move_count": len(move_records),
+        "moves": move_records
+    }
+    with open(log_path, "w", encoding="utf-8") as f:
+        json.dump(payload, f, ensure_ascii=False, indent=2)
+
+
+def load_undo_log(root_folder: str):
+    log_path = get_undo_log_path(root_folder)
+    if not log_path.exists():
+        return None
+    with open(log_path, "r", encoding="utf-8") as f:
+        return json.load(f)
+
+
+def delete_undo_log(root_folder: str):
+    log_path = get_undo_log_path(root_folder)
+    if log_path.exists():
+        log_path.unlink()
 
 
 # =========================
@@ -448,7 +348,6 @@ class OrganizerEngine:
             if is_hidden_or_system(item):
                 continue
 
-            # 이미 정리된 최상위 폴더는 재스캔하지 않음
             if item.is_dir() and item.name in TOP_CATEGORIES:
                 continue
 
@@ -472,6 +371,7 @@ class OrganizerEngine:
         moved_count = 0
         skipped_count = 0
         errors = []
+        move_records = []
 
         for row in self.preview_items:
             source = Path(row["source"])
@@ -490,10 +390,50 @@ class OrganizerEngine:
             try:
                 shutil.move(str(source), str(dest_path))
                 moved_count += 1
+
+                move_records.append({
+                    "original_path": str(source),
+                    "moved_path": str(dest_path),
+                    "item_type": row["type"]
+                })
             except Exception as e:
                 errors.append(f"{source.name}: {e}")
 
+        save_undo_log(root_folder, move_records)
         return moved_count, skipped_count, errors
+
+    def undo_last_execute(self, root_folder: str):
+        payload = load_undo_log(root_folder)
+        if not payload:
+            return 0, 0, ["되돌리기 기록이 없습니다."]
+
+        moves = payload.get("moves", [])
+        restored_count = 0
+        skipped_count = 0
+        errors = []
+
+        for record in reversed(moves):
+            moved_path = Path(record["moved_path"])
+            original_path = Path(record["original_path"])
+
+            try:
+                if not moved_path.exists():
+                    skipped_count += 1
+                    continue
+
+                original_path.parent.mkdir(parents=True, exist_ok=True)
+
+                restore_path = unique_path(original_path)
+                shutil.move(str(moved_path), str(restore_path))
+                restored_count += 1
+
+            except Exception as e:
+                errors.append(f"{moved_path.name}: {e}")
+
+        if restored_count > 0 and not errors:
+            delete_undo_log(root_folder)
+
+        return restored_count, skipped_count, errors
 
 
 # =========================
@@ -503,7 +443,7 @@ class OrganizerApp:
     def __init__(self, master):
         self.master = master
         self.master.title("제목 기반 자동 파일 정리 프로그램")
-        self.master.geometry("1280x720")
+        self.master.geometry("1280x760")
 
         self.engine = OrganizerEngine()
         self.selected_folder = tk.StringVar()
@@ -516,12 +456,13 @@ class OrganizerApp:
 
         ttk.Label(top_frame, text="정리할 폴더:").pack(side="left", padx=(0, 5))
 
-        self.folder_entry = ttk.Entry(top_frame, textvariable=self.selected_folder, width=90)
+        self.folder_entry = ttk.Entry(top_frame, textvariable=self.selected_folder, width=85)
         self.folder_entry.pack(side="left", fill="x", expand=True)
 
         ttk.Button(top_frame, text="폴더 선택", command=self.choose_folder).pack(side="left", padx=5)
         ttk.Button(top_frame, text="미리보기", command=self.run_preview).pack(side="left", padx=5)
         ttk.Button(top_frame, text="실행", command=self.run_execute).pack(side="left", padx=5)
+        ttk.Button(top_frame, text="되돌리기", command=self.run_undo).pack(side="left", padx=5)
 
         info_frame = ttk.Frame(self.master, padding=(10, 0, 10, 10))
         info_frame.pack(fill="x")
@@ -530,7 +471,7 @@ class OrganizerApp:
         self.summary_label.pack(side="left")
 
         columns = ("name", "type", "ext", "size", "target", "reason")
-        self.tree = ttk.Treeview(self.master, columns=columns, show="headings", height=25)
+        self.tree = ttk.Treeview(self.master, columns=columns, show="headings", height=27)
         self.tree.pack(fill="both", expand=True, padx=10, pady=10)
 
         self.tree.heading("name", text="이름")
@@ -552,7 +493,7 @@ class OrganizerApp:
 
         ttk.Label(
             bottom_frame,
-            text="※ 제목 키워드를 우선 해석하고, 부족하면 내용/확장자로 보조 분류합니다."
+            text="※ 제목 키워드를 우선 해석하고, 부족하면 내용/확장자로 보조 분류합니다. 마지막 실행은 되돌리기 가능합니다."
         ).pack(side="left")
 
     def choose_folder(self):
@@ -611,7 +552,7 @@ class OrganizerApp:
 
         ok = messagebox.askyesno(
             "확인",
-            "미리보기 결과대로 파일과 폴더를 이동합니다.\n계속 진행할까요?"
+            "미리보기 결과대로 파일과 폴더를 이동합니다.\n기존 마지막 되돌리기 기록은 새 실행으로 덮어써집니다.\n계속 진행할까요?"
         )
         if not ok:
             return
@@ -629,6 +570,39 @@ class OrganizerApp:
         except Exception as e:
             traceback.print_exc()
             messagebox.showerror("오류", f"실행 중 오류 발생\n\n{e}")
+
+    def run_undo(self):
+        folder = self.selected_folder.get().strip()
+        if not folder:
+            messagebox.showwarning("알림", "먼저 폴더를 선택해주세요.")
+            return
+
+        payload = load_undo_log(folder)
+        if not payload:
+            messagebox.showwarning("알림", "되돌릴 마지막 실행 기록이 없습니다.")
+            return
+
+        move_count = payload.get("move_count", 0)
+        ok = messagebox.askyesno(
+            "되돌리기 확인",
+            f"마지막 정리 작업 {move_count}개 항목을 이전 위치로 되돌립니다.\n계속 진행할까요?"
+        )
+        if not ok:
+            return
+
+        try:
+            restored_count, skipped_count, errors = self.engine.undo_last_execute(folder)
+
+            msg = f"되돌리기 완료\n\n복원: {restored_count}개\n건너뜀: {skipped_count}개"
+            if errors:
+                msg += f"\n오류: {len(errors)}개\n\n상위 10개 오류:\n" + "\n".join(errors[:10])
+
+            messagebox.showinfo("완료", msg)
+            self.run_preview()
+
+        except Exception as e:
+            traceback.print_exc()
+            messagebox.showerror("오류", f"되돌리기 중 오류 발생\n\n{e}")
 
 
 # =========================
